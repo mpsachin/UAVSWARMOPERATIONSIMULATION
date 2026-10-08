@@ -1,10 +1,38 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as Cesium from 'cesium';
-import 'cesium/Source/Widgets/widgets.css';
+import 'cesium/Build/Cesium/Widgets/widgets.css';
 
-(window as any).CESIUM_BASE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/cesium/1.115.0/Build/Cesium/';
+(window as any).CESIUM_BASE_URL = '/cesium/';
 
 type Phase = 'PREFLIGHT' | 'INGRESS' | 'ONSTATION' | 'EGRESS' | 'POSTFLIGHT';
+
+const phaseDetails: Record<Phase, { title: string; objective: string; location: string }> = {
+  PREFLIGHT: {
+    title: 'Preflight diagnostics',
+    objective: 'Avionics spin-up and launch readiness checks',
+    location: 'INS Mumbai (D62)',
+  },
+  INGRESS: {
+    title: 'Ingress',
+    objective: 'Swarm climbing and transiting to the formation waypoint',
+    location: 'North of task force',
+  },
+  ONSTATION: {
+    title: 'On station',
+    objective: 'Swarm conducting coordinated patrol inside the area of operations',
+    location: 'Patrol area',
+  },
+  EGRESS: {
+    title: 'Egress',
+    objective: 'Units following return corridors to the task force',
+    location: 'Return to INS Mumbai',
+  },
+  POSTFLIGHT: {
+    title: 'Postflight recovery',
+    objective: 'All units recovered; mission debrief in progress',
+    location: 'INS Mumbai (D62)',
+  },
+};
 
 interface SwarmTelemetry {
   id: string;
@@ -19,6 +47,8 @@ export const UavSimulation: React.FC = () => {
   const viewerRef = useRef<Cesium.Viewer | null>(null);
   const swarmEntitiesRef = useRef<Cesium.Entity[]>([]);
   const shipEntityRef = useRef<Cesium.Entity | null>(null);
+  const swarmCenterRef = useRef<Cesium.Entity | null>(null);
+  const missionEntitiesRef = useRef<Cesium.Entity[]>([]);
   
   const [currentPhase, setCurrentPhase] = useState<Phase>('PREFLIGHT');
   const [telemetry, setTelemetry] = useState<SwarmTelemetry[]>([]);
@@ -28,11 +58,32 @@ export const UavSimulation: React.FC = () => {
   const originLat = 15.0;
   const shipHeight = 0;
 
-  const droneModelUrl = 'https://raw.githubusercontent.com/CesiumGS/cesium/main/Apps/SampleData/models/CesiumDrone/CesiumDrone.gltf';
+  const droneModelUrl = '/models/shahed-136.glb';
+  const shipModelUrl = '/models/ins-mumbai.glb';
 
   const logEvent = (message: string) => {
-    setSystemLogs((prev) => [`[\${new Date().toLocaleTimeString()}] \${message}`, ...prev.slice(0, 15)]);
+    setSystemLogs((prev) => [`[${new Date().toLocaleTimeString()}] ${message}`, ...prev.slice(0, 15)]);
   };
+
+  function focusOnPhase(phase: Phase) {
+    const viewer = viewerRef.current;
+    const target = phase === 'PREFLIGHT' || phase === 'POSTFLIGHT'
+      ? shipEntityRef.current
+      : swarmCenterRef.current;
+    if (!viewer || !target) return;
+
+    const cameraOffset = phase === 'PREFLIGHT' || phase === 'POSTFLIGHT'
+      ? new Cesium.Cartesian3(0, -700, 500)
+      : phase === 'ONSTATION'
+        ? new Cesium.Cartesian3(0, -10500, 7200)
+        : new Cesium.Cartesian3(0, -8500, 6000);
+    target.viewFrom = cameraOffset;
+
+    if (viewer.trackedEntity === target) {
+      viewer.trackedEntity = undefined;
+    }
+    viewer.trackedEntity = target;
+  }
 
   useEffect(() => {
     if (!cesiumContainerRef.current) return;
@@ -51,27 +102,30 @@ export const UavSimulation: React.FC = () => {
     viewerRef.current = viewer;
 
     viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(originLon, originLat - 0.02, 800),
+      destination: Cesium.Cartesian3.fromDegrees(originLon, originLat + 0.04, 26000),
       orientation: {
         heading: Cesium.Math.toRadians(0),
-        pitch: Cesium.Math.toRadians(-30),
+        pitch: Cesium.Math.toRadians(-55),
         roll: 0,
       },
     });
+    viewer.clock.shouldAnimate = true;
 
     const shipEntity = viewer.entities.add({
+      id: 'INS_MUMBAI',
       position: Cesium.Cartesian3.fromDegrees(originLon, originLat, shipHeight),
-      box: {
-        dimensions: new Cesium.Cartesian3(40, 150, 25),
-        material: Cesium.Color.SLATEGRAY,
-        outline: true,
-        outlineColor: Cesium.Color.BLACK,
+      model: {
+        uri: shipModelUrl,
+        minimumPixelSize: 110,
+        maximumScale: 10,
+        scale: 10,
+        runAnimations: false,
       },
       label: {
-        text: 'CVN-Tactical Flagship',
+        text: 'INS MUMBAI (D62)',
         font: '14px monospace',
         verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-        pixelOffset: new Cesium.Cartesian2(0, -20),
+        pixelOffset: new Cesium.Cartesian2(0, -42),
       },
     });
     shipEntityRef.current = shipEntity;
@@ -80,8 +134,8 @@ export const UavSimulation: React.FC = () => {
     const initialTelemetry: SwarmTelemetry[] = [];
 
     for (let i = 0; i < 5; i++) {
-      const offsetLon = originLon + (i - 2) * 0.0001;
-      const id = `UAV-\${100 + i}`;
+      const offsetLon = originLon + (i - 2) * 0.00045;
+      const id = `UAV-${100 + i}`;
       const initialPos = Cesium.Cartesian3.fromDegrees(offsetLon, originLat, shipHeight + 15);
       
       const drone = viewer.entities.add({
@@ -92,10 +146,10 @@ export const UavSimulation: React.FC = () => {
         ),
         model: {
           uri: droneModelUrl,
-          minimumPixelSize: 64,
-          maximumScale: 200,
-          scale: 15.0,
-          runAnimations: true
+          minimumPixelSize: 48,
+          maximumScale: 15,
+          scale: 5.0,
+          runAnimations: false
         },
         label: {
           text: id,
@@ -116,6 +170,23 @@ export const UavSimulation: React.FC = () => {
     }
 
     swarmEntitiesRef.current = drones;
+    swarmCenterRef.current = viewer.entities.add({
+      id: 'UAV_SWARM_CENTER',
+      position: new Cesium.CallbackPositionProperty((time, result) => {
+        const center = new Cesium.Cartesian3();
+        let count = 0;
+        drones.forEach((drone) => {
+          const position = drone.position?.getValue(time);
+          if (position) {
+            Cesium.Cartesian3.add(center, position, center);
+            count += 1;
+          }
+        });
+        return count
+          ? Cesium.Cartesian3.divideByScalar(center, count, result ?? new Cesium.Cartesian3())
+          : Cesium.Cartesian3.fromDegrees(originLon, originLat, shipHeight, Cesium.Ellipsoid.WGS84, result);
+      }, false, Cesium.ReferenceFrame.FIXED),
+    });
     setTelemetry(initialTelemetry);
     logEvent('3D glTF Assets loaded. System initialization complete.');
 
@@ -130,10 +201,59 @@ export const UavSimulation: React.FC = () => {
     const drones = swarmEntitiesRef.current;
     const now = Cesium.JulianDate.now();
 
+    missionEntitiesRef.current.forEach((entity) => viewer.entities.remove(entity));
+    missionEntitiesRef.current = [];
+    viewer.entities.removeById('AO_ZONE');
+
+    const addMissionRoute = (id: string, positions: Cesium.Cartesian3[], color: Cesium.Color) => {
+      missionEntitiesRef.current.push(viewer.entities.add({
+        id: `MISSION_ROUTE_${id}`,
+        polyline: {
+          positions,
+          width: 3,
+          material: color.withAlpha(0.85),
+          clampToGround: false,
+        },
+      }));
+    };
+
+    const addMissionMarker = (id: string, text: string, longitude: number, latitude: number, color: Cesium.Color) => {
+      missionEntitiesRef.current.push(viewer.entities.add({
+        id: `MISSION_MARKER_${id}`,
+        position: Cesium.Cartesian3.fromDegrees(longitude, latitude, 0),
+        point: {
+          pixelSize: 12,
+          color,
+          outlineColor: Cesium.Color.WHITE,
+          outlineWidth: 2,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: {
+          text,
+          font: 'bold 13px monospace',
+          fillColor: Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cesium.Cartesian2(12, -12),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      }));
+    };
+
+    const routeColors = [
+      Cesium.Color.CYAN,
+      Cesium.Color.LIME,
+      Cesium.Color.YELLOW,
+      Cesium.Color.ORANGE,
+      Cesium.Color.MAGENTA,
+    ];
+
     switch (currentPhase) {
       case 'PREFLIGHT':
         logEvent('Executing Preflight diagnostics: Avionics spin-up.');
         setTelemetry(prev => prev.map(t => ({ ...t, status: 'DIAGNOSTICS', speed: 0, altitude: 0 })));
+        addMissionMarker('FLAGSHIP', 'PREFLIGHT / FLAGSHIP', originLon, originLat, Cesium.Color.CYAN);
         break;
 
       case 'INGRESS':
@@ -144,7 +264,7 @@ export const UavSimulation: React.FC = () => {
           const property = new Cesium.SampledPositionProperty();
           
           const time0 = Cesium.JulianDate.addSeconds(now, 0, new Cesium.JulianDate());
-          const pos0 = Cesium.Cartesian3.fromDegrees(originLon + (index - 2) * 0.0001, originLat, shipHeight + 15);
+          const pos0 = Cesium.Cartesian3.fromDegrees(originLon + (index - 2) * 0.00045, originLat, shipHeight + 15);
           property.addSample(time0, pos0);
 
           const time1 = Cesium.JulianDate.addSeconds(now, 6, new Cesium.JulianDate());
@@ -157,37 +277,35 @@ export const UavSimulation: React.FC = () => {
           const pos2 = Cesium.Cartesian3.fromDegrees(targetLon, targetLat, 600);
           property.addSample(time2, pos2);
 
+          addMissionRoute(drone.id, [pos0, pos1, pos2], routeColors[index]);
           drone.position = property;
           drone.orientation = new Cesium.VelocityOrientationProperty(property) as any;
         });
 
-        viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(originLon, originLat + 0.03, 1500),
-          duration: 4,
-        });
+        addMissionMarker('INGRESS', 'INGRESS FORMATION', originLon, originLat + 0.05, Cesium.Color.CYAN);
         break;
 
       case 'ONSTATION':
         logEvent('Onstation achieved. Initiating dynamic tactical loops.');
         setTelemetry(prev => prev.map(t => ({ ...t, status: 'COMBAT_PATROL', speed: 180, altitude: 600 })));
 
-        if (!viewer.entities.getById('AO_ZONE')) {
-          viewer.entities.add({
-            id: 'AO_ZONE',
-            position: Cesium.Cartesian3.fromDegrees(originLon, originLat + 0.08, 0),
-            ellipse: {
-              semiMinorAxis: 4000.0,
-              semiMajorAxis: 4000.0,
-              material: Cesium.Color.RED.withAlpha(0.12),
-              outline: true,
-              outlineColor: Cesium.Color.RED,
-            }
-          });
-        }
+        viewer.entities.add({
+          id: 'AO_ZONE',
+          position: Cesium.Cartesian3.fromDegrees(originLon, originLat + 0.08, 0),
+          ellipse: {
+            semiMinorAxis: 4000.0,
+            semiMajorAxis: 4000.0,
+            material: Cesium.Color.RED.withAlpha(0.12),
+            outline: true,
+            outlineColor: Cesium.Color.RED,
+          },
+        });
+        addMissionMarker('PATROL', 'ACTIVE PATROL AREA', originLon, originLat + 0.08, Cesium.Color.RED);
 
         drones.forEach((drone, index) => {
           const property = new Cesium.SampledPositionProperty();
           const radius = 0.025;
+          const patrolPositions: Cesium.Cartesian3[] = [];
           
           for (let step = 0; step <= 360; step += 30) {
             const timeOffset = (step / 30) * 2.5;
@@ -197,7 +315,9 @@ export const UavSimulation: React.FC = () => {
             const lat = (originLat + 0.08) + radius * Math.sin(radians);
             const pos = Cesium.Cartesian3.fromDegrees(lon, lat, 600);
             property.addSample(time, pos);
+            patrolPositions.push(pos);
           }
+          if (index === 0) addMissionRoute('PATROL', patrolPositions, Cesium.Color.RED);
           drone.position = property;
           drone.orientation = new Cesium.VelocityOrientationProperty(property) as any;
         });
@@ -206,7 +326,6 @@ export const UavSimulation: React.FC = () => {
       case 'EGRESS':
         logEvent('Routing egress corridors back to task force.');
         setTelemetry(prev => prev.map(t => ({ ...t, status: 'RETURNING', speed: 140, battery: 28 })));
-        viewer.entities.removeById('AO_ZONE');
 
         drones.forEach((drone, index) => {
           const property = new Cesium.SampledPositionProperty();
@@ -216,20 +335,24 @@ export const UavSimulation: React.FC = () => {
           property.addSample(time0, currentPos);
 
           const time1 = Cesium.JulianDate.addSeconds(now, 12, new Cesium.JulianDate());
-          const returnPos = Cesium.Cartesian3.fromDegrees(originLon + (index - 2) * 0.0001, originLat, shipHeight + 15);
+          const returnPos = Cesium.Cartesian3.fromDegrees(originLon + (index - 2) * 0.00045, originLat, shipHeight + 15);
           property.addSample(time1, returnPos);
 
+          addMissionRoute(drone.id, [currentPos, returnPos], routeColors[index]);
           drone.position = property;
           drone.orientation = new Cesium.VelocityOrientationProperty(property) as any;
         });
+        addMissionMarker('RECOVERY', 'RECOVERY / FLAGSHIP', originLon, originLat, Cesium.Color.LIME);
         break;
 
       case 'POSTFLIGHT':
         logEvent('All units safely recovered on deck.');
         setTelemetry(prev => prev.map(t => ({ ...t, status: 'DEBRIEFING', speed: 0, altitude: 0, battery: 18 })));
+        viewer.entities.removeById('AO_ZONE');
+        addMissionMarker('RECOVERY_COMPLETE', 'UNITS RECOVERED', originLon, originLat, Cesium.Color.LIME);
         
         drones.forEach((drone, index) => {
-          const restingPos = Cesium.Cartesian3.fromDegrees(originLon + (index - 2) * 0.0001, originLat, shipHeight + 15);
+          const restingPos = Cesium.Cartesian3.fromDegrees(originLon + (index - 2) * 0.00045, originLat, shipHeight + 15);
           drone.position = new Cesium.ConstantPositionProperty(restingPos);
           const heading = Cesium.Math.toRadians(0);
           const pitch = 0;
@@ -239,7 +362,10 @@ export const UavSimulation: React.FC = () => {
         });
         break;
     }
+    focusOnPhase(currentPhase);
   }, [currentPhase]);
+
+  const activeOperation = phaseDetails[currentPhase];
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -265,7 +391,13 @@ export const UavSimulation: React.FC = () => {
           {(['PREFLIGHT', 'INGRESS', 'ONSTATION', 'EGRESS', 'POSTFLIGHT'] as Phase[]).map((phase) => (
             <button
               key={phase}
-              onClick={() => setCurrentPhase(phase)}
+              onClick={() => {
+                if (currentPhase === phase) {
+                  focusOnPhase(phase);
+                } else {
+                  setCurrentPhase(phase);
+                }
+              }}
               style={{
                 padding: '12px',
                 textAlign: 'left',
@@ -314,7 +446,40 @@ export const UavSimulation: React.FC = () => {
           ))}
         </div>
       </div>
-      <div ref={cesiumContainerRef} style={{ flexGrow: 1, height: '100%' }} />
+      <div style={{ position: 'relative', flexGrow: 1, minWidth: 0, height: '100%' }}>
+        <div ref={cesiumContainerRef} style={{ width: '100%', height: '100%' }} />
+        <section
+          aria-label="Active operation on map"
+          style={{
+            position: 'absolute',
+            top: '16px',
+            left: '16px',
+            width: 'min(360px, calc(100% - 32px))',
+            padding: '16px',
+            border: '1px solid #3b82f6',
+            borderRadius: '8px',
+            background: 'rgba(12, 16, 23, 0.92)',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)',
+            pointerEvents: 'none',
+          }}
+        >
+          <div style={{ color: '#8b949e', fontSize: '11px', letterSpacing: '1px' }}>ACTIVE OPERATION</div>
+          <div style={{ marginTop: '6px', color: '#58a6ff', fontSize: '20px', fontWeight: 'bold' }}>
+            {activeOperation.title.toUpperCase()}
+          </div>
+          <div style={{ marginTop: '8px', fontSize: '13px', lineHeight: 1.5 }}>{activeOperation.objective}</div>
+          <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid #30363d', fontSize: '12px' }}>
+            <span style={{ color: '#8b949e' }}>LOCATION </span>
+            <span>{activeOperation.location}</span>
+            <span style={{ float: 'right', color: '#7ee787' }}>
+              {telemetry.filter((unit) => unit.status !== 'STANDBY').length}/{telemetry.length} UNITS ACTIVE
+            </span>
+          </div>
+          <div style={{ marginTop: '10px', color: '#8b949e', fontSize: '11px' }}>
+            ROUTES ARE COLOR-CODED BY UAV; RED MARKS THE PATROL AREA
+          </div>
+        </section>
+      </div>
     </div>
   );
 };
